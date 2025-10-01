@@ -1,0 +1,380 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Llanta con 2 texturas (outer / inner)</title>
+  <style>
+    body { font-family: sans-serif; background:#eee; text-align:center; margin:20px; }
+    canvas { background: #999; display:block; margin: 0 auto; }
+    .controls { margin-top:10px; }
+    button { margin:4px; padding:6px 10px; }
+  </style>
+</head>
+<body>
+  <canvas width="570" height="570" id="my_Canvas"></canvas>
+  <div class="controls">
+    <button onclick="setRotation('X', 1)">Rotar X +</button>
+    <button onclick="setRotation('X', -1)">Rotar X -</button>
+    <button onclick="setRotation('Y', 1)">Rotar Y +</button>
+    <button onclick="setRotation('Y', -1)">Rotar Y -</button>
+    <button onclick="setRotation('Z', 1)">Rotar Z +</button>
+    <button onclick="setRotation('Z', -1)">Rotar Z -</button>
+    <button onclick="setVelocidad(1)">Más rápido</button>
+    <button onclick="setVelocidad(-1)">Más lento</button>
+  </div>
+
+<script>
+var gl;
+var mov_matrixCyl, view_matrixCyl;
+var velocidad = 10;
+var rotationAxis = null;
+var rotationDirection = 0;
+
+main();
+
+function main(){
+  var canvas = document.getElementById('my_Canvas');
+  gl = canvas.getContext('experimental-webgl') || canvas.getContext('webgl');
+  if(!gl){ alert("WebGL no disponible"); return; }
+
+  // ------- Generación de la "llanta" (tire) -------
+  var sides = 48;                // más lados => más suave
+  var height = 0.5;             // semi-altura de la llanta
+  var outerRadius = 2.0;         // radio exterior (textura1)
+  var innerRadius = 0.5;         // radio interior (textura2)
+  var step = 2*Math.PI / sides;
+
+  var verticesCyl = [];
+  var uvsCyl = [];
+  var regionMarkers = []; // 0 => outer texture (texture1.jpg), 1 => inner texture (texture2.jpg)
+  var theta, nextTheta;
+
+  // Top ring (anillo entre innerRadius y outerRadius) - triangulación por triángulos
+  for(var j=0;j<sides;j++){
+    theta = j*step;
+    nextTheta = (j+1)*step;
+
+    // tri 1
+    verticesCyl.push(innerRadius*Math.cos(theta),  height, innerRadius*Math.sin(theta));
+    verticesCyl.push(outerRadius*Math.cos(theta),  height, outerRadius*Math.sin(theta));
+    verticesCyl.push(outerRadius*Math.cos(nextTheta), height, outerRadius*Math.sin(nextTheta));
+    // tri 2
+    verticesCyl.push(innerRadius*Math.cos(theta),  height, innerRadius*Math.sin(theta));
+    verticesCyl.push(outerRadius*Math.cos(nextTheta), height, outerRadius*Math.sin(nextTheta));
+    verticesCyl.push(innerRadius*Math.cos(nextTheta), height, innerRadius*Math.sin(nextTheta));
+  }
+
+  // Bottom ring (anillo)
+  for(var j=0;j<sides;j++){
+    theta = j*step;
+    nextTheta = (j+1)*step;
+
+    // invertimos el orden para normales coherentes
+    verticesCyl.push(innerRadius*Math.cos(theta), -height, innerRadius*Math.sin(theta));
+    verticesCyl.push(outerRadius*Math.cos(nextTheta), -height, outerRadius*Math.sin(nextTheta));
+    verticesCyl.push(outerRadius*Math.cos(theta), -height, outerRadius*Math.sin(theta));
+
+    verticesCyl.push(innerRadius*Math.cos(theta), -height, innerRadius*Math.sin(theta));
+    verticesCyl.push(innerRadius*Math.cos(nextTheta), -height, innerRadius*Math.sin(nextTheta));
+    verticesCyl.push(outerRadius*Math.cos(nextTheta), -height, outerRadius*Math.sin(nextTheta));
+  }
+
+  // Outer wall (superficie exterior de la llanta)
+  for(var j=0;j<sides;j++){
+    theta = j*step;
+    nextTheta = (j+1)*step;
+
+    verticesCyl.push(outerRadius*Math.cos(theta),  height, outerRadius*Math.sin(theta));
+    verticesCyl.push(outerRadius*Math.cos(theta), -height, outerRadius*Math.sin(theta));
+    verticesCyl.push(outerRadius*Math.cos(nextTheta), -height, outerRadius*Math.sin(nextTheta));
+
+    verticesCyl.push(outerRadius*Math.cos(theta),  height, outerRadius*Math.sin(theta));
+    verticesCyl.push(outerRadius*Math.cos(nextTheta), -height, outerRadius*Math.sin(nextTheta));
+    verticesCyl.push(outerRadius*Math.cos(nextTheta),  height, outerRadius*Math.sin(nextTheta));
+  }
+
+  // Inner wall (superficie interior del anillo)
+  for(var j=0;j<sides;j++){
+    theta = j*step;
+    nextTheta = (j+1)*step;
+
+    verticesCyl.push(innerRadius*Math.cos(theta),  height, innerRadius*Math.sin(theta));
+    verticesCyl.push(innerRadius*Math.cos(nextTheta), -height, innerRadius*Math.sin(nextTheta));
+    verticesCyl.push(innerRadius*Math.cos(theta), -height, innerRadius*Math.sin(theta));
+
+    verticesCyl.push(innerRadius*Math.cos(theta),  height, innerRadius*Math.sin(theta));
+    verticesCyl.push(innerRadius*Math.cos(nextTheta),  height, innerRadius*Math.sin(nextTheta));
+    verticesCyl.push(innerRadius*Math.cos(nextTheta), -height, innerRadius*Math.sin(nextTheta));
+  }
+
+  // Center top (relleno dentro del innerRadius) - usa inner texture
+  for(var j=0;j<sides;j++){
+    theta = j*step;
+    nextTheta = (j+1)*step;
+    verticesCyl.push(0.0, height, 0.0);
+    verticesCyl.push(innerRadius*Math.cos(theta), height, innerRadius*Math.sin(theta));
+    verticesCyl.push(innerRadius*Math.cos(nextTheta), height, innerRadius*Math.sin(nextTheta));
+  }
+
+  // Center bottom
+  for(var j=0;j<sides;j++){
+    theta = j*step;
+    nextTheta = (j+1)*step;
+    verticesCyl.push(0.0, -height, 0.0);
+    verticesCyl.push(innerRadius*Math.cos(nextTheta), -height, innerRadius*Math.sin(nextTheta));
+    verticesCyl.push(innerRadius*Math.cos(theta), -height, innerRadius*Math.sin(theta));
+  }
+
+  // Construir UVs y regions a partir de posiciones
+  for(var i=0;i<verticesCyl.length;i+=3){
+    var x = verticesCyl[i], y = verticesCyl[i+1], z = verticesCyl[i+2];
+    // UV: mapeo cilíndrico para la parte lateral, y mapeo polar para tapas
+    var radius = Math.sqrt(x*x + z*z);
+    // u = atan2(z,x) / (2pi) + 0.5
+    var u = Math.atan2(z, x) / (2*Math.PI) + 0.5;
+    // v normalizada entre 0 y 1 usando y en [-height, height]
+    var v = (y + height) / (2*height);
+    // Para centros (x=0,z=0) usaremos mapeo de disco centrado en (0.5,0.5)
+    if(radius < 0.0001){
+      u = 0.5; v = 0.5;
+    }
+    uvsCyl.push(u, v);
+
+    // region: inner (1) vs outer (0)
+    // tomamos umbral intermedio:
+    var mid = (innerRadius + outerRadius) * 0.5;
+    if(radius < mid + 0.0001) regionMarkers.push(1.0); else regionMarkers.push(0.0);
+  }
+
+  var indicesCyl = new Uint16Array(verticesCyl.length / 3);
+  for(var i=0;i<indicesCyl.length;i++) indicesCyl[i] = i;
+
+  // ---------- Buffers ----------
+  var vertex_bufferCyl = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertex_bufferCyl);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verticesCyl), gl.STATIC_DRAW);
+
+  var uv_bufferCyl = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, uv_bufferCyl);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(uvsCyl), gl.STATIC_DRAW);
+
+  var region_bufferCyl = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, region_bufferCyl);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(regionMarkers), gl.STATIC_DRAW);
+
+  var index_bufferCyl = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_bufferCyl);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indicesCyl, gl.STATIC_DRAW);
+
+  // ---------- Shaders ----------
+  var vertCode = ''
+    + 'attribute vec3 position;'
+    + 'attribute vec2 uv;'
+    + 'attribute float region;'
+    + 'uniform mat4 Pmatrix; uniform mat4 Vmatrix; uniform mat4 Mmatrix;'
+    + 'varying vec2 vUV; varying float vRegion;'
+    + 'void main(void){'
+    + '  gl_Position = Pmatrix * Vmatrix * Mmatrix * vec4(position, 1.0);'
+    + '  vUV = uv;'
+    + '  vRegion = region;'
+    + '}';
+
+  var fragCode = ''
+    + 'precision mediump float;'
+    + 'varying vec2 vUV; varying float vRegion;'
+    + 'uniform sampler2D uOuterSampler;'
+    + 'uniform sampler2D uInnerSampler;'
+    + 'uniform bool useTexture;'
+    + 'void main(void){'
+    + '  if(useTexture){'
+    + '    if(vRegion > 0.5) { gl_FragColor = texture2D(uInnerSampler, vUV); }'
+    + '    else { gl_FragColor = texture2D(uOuterSampler, vUV); }'
+    + '  } else { gl_FragColor = vec4(0.8,0.6,0.2,1.0); }'
+    + '}';
+
+  var vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, vertCode);
+  gl.compileShader(vs);
+  if(!gl.getShaderParameter(vs, gl.COMPILE_STATUS)){
+    console.error("VS error:", gl.getShaderInfoLog(vs));
+  }
+
+  var fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, fragCode);
+  gl.compileShader(fs);
+  if(!gl.getShaderParameter(fs, gl.COMPILE_STATUS)){
+    console.error("FS error:", gl.getShaderInfoLog(fs));
+  }
+
+  var shaderProgram = gl.createProgram();
+  gl.attachShader(shaderProgram, vs);
+  gl.attachShader(shaderProgram, fs);
+  gl.linkProgram(shaderProgram);
+  if(!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)){
+    console.error("Program link error:", gl.getProgramInfoLog(shaderProgram));
+  }
+  gl.useProgram(shaderProgram);
+
+  // locations
+  var PmatrixCyl = gl.getUniformLocation(shaderProgram, "Pmatrix");
+  var VmatrixCyl = gl.getUniformLocation(shaderProgram, "Vmatrix");
+  var MmatrixCyl = gl.getUniformLocation(shaderProgram, "Mmatrix");
+  var uOuterSampler = gl.getUniformLocation(shaderProgram, "uOuterSampler");
+  var uInnerSampler = gl.getUniformLocation(shaderProgram, "uInnerSampler");
+  var useTexture = gl.getUniformLocation(shaderProgram, "useTexture");
+
+  var positionLoc = gl.getAttribLocation(shaderProgram, "position");
+  var uvLoc = gl.getAttribLocation(shaderProgram, "uv");
+  var regionLoc = gl.getAttribLocation(shaderProgram, "region");
+
+  // Bind attributes
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertex_bufferCyl);
+  gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(positionLoc);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, uv_bufferCyl);
+  gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(uvLoc);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, region_bufferCyl);
+  gl.vertexAttribPointer(regionLoc, 1, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(regionLoc);
+
+  // projection + matrices
+  var proj_matrixCyl = get_projection(45, canvas.width/canvas.height, 0.1, 100);
+  mov_matrixCyl = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+  view_matrixCyl = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+  view_matrixCyl[14] = view_matrixCyl[14] - 6.0;
+  rotateX(mov_matrixCyl, Math.PI/2);
+
+  // Texturas
+  var outerTexture = gl.createTexture();
+  var innerTexture = gl.createTexture();
+  var texturesLoaded = 0;
+
+  function handleTextureLoaded(image, texture){
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    texturesLoaded++;
+  }
+
+  var img1 = new Image();
+  img1.onload = function(){ handleTextureLoaded(img1, outerTexture); };
+  img1.src = "_textura.jpg";
+
+  var img2 = new Image();
+  img2.onload = function(){ handleTextureLoaded(img2, innerTexture); };
+  img2.src = "__textura.png";
+
+  // Animation & draw
+  var time_old = 0;
+  var posicion = 0;
+  var direccion = 1;
+  var spinSpeed = 2.0; // radianes por segundo (ajusta a gusto)
+
+
+  function animate(time){
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.clearColor(0.45, 0.45, 0.45, 1.0);
+    gl.viewport(0,0,canvas.width,canvas.height);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    var dt = time - time_old;
+    time_old = time;
+
+    // Aplicar rotación si se solicitó mediante botones
+    if(rotationDirection !== 0){
+      if(rotationAxis === 'X') rotateX(view_matrixCyl, dt * 0.02 * rotationDirection);
+      else if(rotationAxis === 'Y') rotateY(view_matrixCyl, dt * 0.02 * rotationDirection);
+      else if(rotationAxis === 'Z') rotateZ(view_matrixCyl, dt * 0.02 * rotationDirection);
+      rotationDirection = 0;
+    }
+
+    // Oscilación / movimiento de la llanta por ejemplo
+    posicion += direccion * velocidad * 0.003;
+    mov_matrixCyl[12] = Math.sin(posicion) * 2.5;
+    mov_matrixCyl[13] = Math.cos(posicion) * 2.5;
+
+    gl.useProgram(shaderProgram);
+
+    // Si texturas cargadas, usar texture mapping
+    gl.uniform1i(useTexture, texturesLoaded >= 2 ? 1 : 0);
+
+    // Bind texturas a unidades
+    if(texturesLoaded >= 2){
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, outerTexture);
+      gl.uniform1i(uOuterSampler, 0);
+
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, innerTexture);
+      gl.uniform1i(uInnerSampler, 1);
+    }
+    
+    // dt está en ms: convertir a segundos
+    var seconds = dt * 0.001;
+    // girar la llanta alrededor de su eje Z (o X/Y según orientación)
+    rotateZ(mov_matrixCyl, spinSpeed * seconds * direccion); // direccion puede ser 1 o -1
+
+
+    gl.uniformMatrix4fv(PmatrixCyl, false, proj_matrixCyl);
+    gl.uniformMatrix4fv(VmatrixCyl, false, view_matrixCyl);
+    gl.uniformMatrix4fv(MmatrixCyl, false, mov_matrixCyl);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_bufferCyl);
+    gl.drawElements(gl.TRIANGLES, indicesCyl.length, gl.UNSIGNED_SHORT, 0);
+
+    window.requestAnimationFrame(animate);
+  }
+
+  animate(0);
+}
+
+// ----------------- utilidades --------------
+function get_projection(angle, a, zMin, zMax){
+  var ang = Math.tan((angle*.5)*Math.PI/180);
+  return [
+    0.5/ang, 0, 0, 0,
+    0, 0.5*a/ang, 0, 0,
+    0, 0, -(zMax+zMin)/(zMax-zMin), -1,
+    0, 0, (-2*zMax*zMin)/(zMax-zMin), 0
+  ];
+}
+
+function rotateZ(m, angle){
+  var c = Math.cos(angle), s = Math.sin(angle);
+  var mv0=m[0], mv4=m[4], mv8=m[8];
+  m[0] = c*m[0]-s*m[1]; m[4] = c*m[4]-s*m[5]; m[8] = c*m[8]-s*m[9];
+  m[1] = c*m[1]+s*mv0; m[5] = c*m[5]+s*mv4; m[9] = c*m[9]+s*mv8;
+}
+function rotateY(m, angle){
+  var c = Math.cos(angle), s = Math.sin(angle);
+  var mv0=m[0], mv4=m[4], mv8=m[8];
+  m[0] = c*m[0]+s*m[2]; m[4] = c*m[4]+s*m[6]; m[8] = c*m[8]+s*m[10];
+  m[2] = c*m[2]-s*mv0; m[6] = c*m[6]-s*mv4; m[10] = c*m[10]-s*mv8;
+}
+function rotateX(m, angle){
+  var c = Math.cos(angle), s = Math.sin(angle);
+  var mv1=m[1], mv5=m[5], mv9=m[9];
+  m[1] = m[1]*c-m[2]*s; m[5] = m[5]*c-m[6]*s; m[9] = m[9]*c-m[10]*s;
+  m[2] = m[2]*c+mv1*s; m[6] = m[6]*c+mv5*s; m[10] = m[10]*c+mv9*s;
+}
+
+function setRotation(axis, direction){
+  rotationAxis = axis;
+  rotationDirection = direction;
+}
+function setVelocidad(change){
+  velocidad += change;
+  if(velocidad < 1) velocidad = 1;
+  if(velocidad > 40) velocidad = 40;
+}
+</script>
+</body>
+</html>
